@@ -36,7 +36,7 @@ int main()
 		exit(EXIT_FAILURE);				  // Exit the program with failure status
 	}
 	client.server_addr.sin_family = AF_INET;															// Set address family to IPv4
-	client.server_addr.sin_port = htons(6001);															// Set port number (converted to network byte order)
+	client.server_addr.sin_port = htons(6004);															// Set port number (converted to network byte order)
 	client.server_addr.sin_addr.s_addr = inet_addr("172.30.244.176");									// Set server IP address
 	if (connect(client.sockfd, (struct sockaddr *)&client.server_addr, sizeof(client.server_addr)) < 0) // Attempt to connect to the server
 	{
@@ -75,6 +75,10 @@ void login_menu(Client_struct *client, chatroom_packet *packet)
 			else if (!strncmp(packet->error_packet.error_message, "login_failed", 13)) // Check if login failed
 			{
 				printf(" ❌ Invalid username or password\n"); // Print login failure message
+			}
+			else if(!strncmp(packet->error_packet.error_message, "Username does not exist", 23)) // Check if username does not exist
+			{
+				printf(" ❌ Username does not exist. Please register first.\n"); // Print username does not exist message
 			}
 			break;
 		case 2:
