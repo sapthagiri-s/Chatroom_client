@@ -2,7 +2,8 @@
 
 Client_struct client; // Declare a variable of type Client_struct
 chatroom_packet packet;
-
+int choice2 = 0, flag = 0;
+char before_username[100];
 void handle_sigint(int sig)
 {
 	printf("\n[INFO] Disconnecting from server...\n");
@@ -36,7 +37,7 @@ int main()
 		exit(EXIT_FAILURE);				  // Exit the program with failure status
 	}
 	client.server_addr.sin_family = AF_INET;															// Set address family to IPv4
-	client.server_addr.sin_port = htons(6004);															// Set port number (converted to network byte order)
+	client.server_addr.sin_port = htons(6007);															// Set port number (converted to network byte order)
 	client.server_addr.sin_addr.s_addr = inet_addr("172.30.244.176");									// Set server IP address
 	if (connect(client.sockfd, (struct sockaddr *)&client.server_addr, sizeof(client.server_addr)) < 0) // Attempt to connect to the server
 	{
@@ -51,12 +52,13 @@ int main()
 
 void login_menu(Client_struct *client, chatroom_packet *packet)
 {
+	int choice1 = 0;
 	while (1)
 	{
 		printf("\n1️⃣  Login\n2️⃣  Register\n3️⃣  Exit\n\n--------------------------------------------------\n 👉 Enter your option : ");
-		int choice;
-		scanf("%d", &choice); // Read user choice
-		switch (choice)		  // Switch case to handle user choice
+		__fpurge(stdin);
+		scanf("%d", &choice1); // Read user choice
+		switch (choice1)	   // Switch case to handle user choice
 		{
 		case 1:
 			Login(client, packet);												   // Call the Login
@@ -76,7 +78,7 @@ void login_menu(Client_struct *client, chatroom_packet *packet)
 			{
 				printf(" ❌ Invalid username or password\n"); // Print login failure message
 			}
-			else if(!strncmp(packet->error_packet.error_message, "Username does not exist", 23)) // Check if username does not exist
+			else if (!strncmp(packet->error_packet.error_message, "Username does not exist", 23)) // Check if username does not exist
 			{
 				printf(" ❌ Username does not exist. Please register first.\n"); // Print username does not exist message
 			}
@@ -174,9 +176,9 @@ void Register(Client_struct *client, chatroom_packet *packet)
 void chat_menu(Client_struct *client, chatroom_packet *packet)
 {
 	printf("=================== CHAT MENU ====================\n\n 1️⃣  Single User Chat\n 2️⃣  Multi User Chat\n 3️⃣  Logout\n\n==================================================\n👉 Select chat mode : ");
-	int choice;
-	scanf("%d", &choice); // Read user choice
-	switch (choice)		  // Switch case to handle user choice
+	__fpurge(stdin);
+	scanf("%d", &choice2); // Read user choice
+	switch (choice2)	   // Switch case to handle user choice
 	{
 	case 1:
 		printf("==================================================\n\t\tCHAT ROOM\n==================================================\n Logged in User : %s\n", packet->user.username);
@@ -195,6 +197,7 @@ void chat_menu(Client_struct *client, chatroom_packet *packet)
 		break;
 	default:
 		printf("Invalid choice. Please try again.\n"); // Print invalid choice message
+		choice2 = 0;
 		chat_menu(client, packet);
 		break;
 	}
@@ -217,7 +220,37 @@ int print_online_users(Client_struct *client, chatroom_packet *packet)
 		printf("==================================================\nType message ( /exit to quit or /Users to list online users):\n");
 	}
 }
+void single_user_chat_menu(int sockfd, chatroom_packet *login_packet)
+{
+	login_packet->type = ONLINE_USERS_LIST;
+	send(sockfd, login_packet, sizeof(*login_packet), 0);
+	sleep(1);
+	private_thread_arg_t *send_ctx1 = malloc(sizeof(*send_ctx1));
+	if (!send_ctx1)
+		return;
+	if (flag == 0)
+	{
+		printf("\nEnter the username of the person you want to chat with: ");
+		scanf("%s", send_ctx1->peer_name);
+		send_ctx1->sockfd = sockfd;
+		memcpy(&send_ctx1->packet, login_packet, sizeof(chatroom_packet));
+		strcpy(send_ctx1->packet.user.from_username, login_packet->user.username);
+	}
+	else
+	{
+		send_ctx1->sockfd = sockfd;
+		memcpy(&send_ctx1->packet, login_packet, sizeof(chatroom_packet));
+		strcpy(send_ctx1->peer_name, before_username);
+		strcpy(send_ctx1->packet.user.from_username, login_packet->user.username);
+		flag = 0;
+	}
 
+	group_chat_running = 1;
+
+	pthread_create(&send_thread, NULL, private_send_thread, send_ctx1);
+	pthread_join(send_thread, NULL);
+	group_chat_running = 0;
+}
 void *group_receive_thread(void *arg)
 {
 	Client_struct *client = (Client_struct *)arg;
@@ -230,6 +263,7 @@ void *group_receive_thread(void *arg)
 
 		if (packet.type == GROUP_CHAT)
 		{
+			choice2 = 2;
 			printf("\n");
 			print_time();
 			printf("%s: %s\n> ", packet.user.username, packet.chat_packet.message);
@@ -242,10 +276,21 @@ void *group_receive_thread(void *arg)
 		}
 		else if (packet.type == PRIVATE_CHAT)
 		{
+			flag = 1;
+			choice2 = 1;
 			printf("\n");
 			print_time();
 			printf("%s: %s\n> ", packet.user.from_username, packet.chat_packet.message);
+			strcpy(before_username, packet.user.from_username);
 			fflush(stdout);
+		}
+		else if (packet.type == LOGOUT)
+		{
+			printf("\n[INFO] Logged out by server. Disconnecting...\n");
+			recv_running = 0;
+			close(client->sockfd);
+			printf("[INFO] Client disconnected. Bye 👋\n");
+			exit(0);
 		}
 	}
 
@@ -256,6 +301,7 @@ void group_chat_menu(int sockfd, chatroom_packet *login_packet)
 {
 	login_packet->type = ONLINE_USERS_LIST;
 	send(sockfd, login_packet, sizeof(*login_packet), 0);
+	sleep(1);
 	/* ---- Sender thread context (packet + socket) ---- */
 	group_thread_arg_t *send_ctx = malloc(sizeof(*send_ctx));
 	if (!send_ctx)
@@ -316,29 +362,6 @@ void *group_send_thread(void *arg)
 	pthread_exit(NULL);
 }
 
-void single_user_chat_menu(int sockfd, chatroom_packet *login_packet)
-{
-	login_packet->type = ONLINE_USERS_LIST;
-	send(sockfd, login_packet, sizeof(*login_packet), 0);
-	sleep(1); // Wait for the online users list to be printed
-	printf("\nEnter the username of the person you want to chat with: ");
-
-	private_thread_arg_t *send_ctx1 = malloc(sizeof(*send_ctx1));
-	if (!send_ctx1)
-		return;
-	scanf("%s", send_ctx1->peer_name);
-	send_ctx1->sockfd = sockfd;
-
-	memcpy(&send_ctx1->packet, login_packet, sizeof(chatroom_packet));
-	strcpy(send_ctx1->packet.user.from_username, login_packet->user.username);
-
-	group_chat_running = 1;
-
-	pthread_create(&send_thread, NULL, private_send_thread, send_ctx1);
-	pthread_join(send_thread, NULL);
-	group_chat_running = 0;
-}
-
 void *private_send_thread(void *arg)
 {
 	private_thread_arg_t *ctx = (private_thread_arg_t *)arg;
@@ -350,7 +373,7 @@ void *private_send_thread(void *arg)
 
 	while (1)
 	{
-		if (packet.type == PRIVATE_CHAT)
+		if (packet.type == PRIVATE_CHAT && flag == 0)
 			printf("> ");
 		scanf(" %[^\n]", packet.chat_packet.message);
 
